@@ -1,45 +1,96 @@
 ---
-title: Introduction
-description: Give readers a clear path from their first question to a result they can verify.
+title: BestFit Job Board API
+description: A Flask API for posting jobs and accepting applications, with confirmation emails and PDF summaries handled in the background.
 mode: home
 ---
 
 <Hero
-  title="Build documentation around the reader"
-  subtitle="Start with a useful first result, organize what follows, and publish every format from one reviewable source."
-  primaryLabel="Get started"
+  title="BestFit Job Board API"
+  subtitle="Post jobs, accept applications, and let a background worker send confirmation emails and generate PDF summaries."
+  primaryLabel="Run the quickstart"
   primaryHref="/quickstart"
-  secondaryLabel="Publish your docs"
-  secondaryHref="/guides/create-a-site"
+  secondaryLabel="Track an application"
+  secondaryHref="/guides/track-application-processing"
 />
 
-## Build the reader journey
+## What it does
 
-Begin with the task that brings most readers to your documentation, then make
-the next useful step obvious.
+The BestFit Job Board API is the backend for a job board. Employers publish
+jobs, candidates search them and apply, and every application starts a
+background pipeline:
+
+1. The API saves the application and responds immediately.
+2. A Celery worker sends the candidate a confirmation email.
+3. The worker renders a PDF summary of the application and stores it in
+   S3-compatible storage.
+
+Because the slow work happens outside the request, applying for a job stays
+fast. Clients check progress by polling `GET /applications/{id}/status`, which
+moves from `pending` to `email_sent` to `pdf_ready`.
+
+## Who it's for
+
+- **Frontend and mobile developers** who need a working backend for a job board
+  or careers page and want clear endpoints to build against.
+- **Backend developers** who want a compact reference for combining Flask, JWT
+  role-based access, Celery, Redis, and object storage.
+- **Teams prototyping a hiring workflow** who want to run the whole stack
+  locally with one command.
+
+<Note>
+  The Docker Compose setup in these docs is built for local development. It
+  uses default storage credentials and a sandbox mail inbox, so review secrets,
+  storage access, and rate limits before you expose the API publicly.
+</Note>
+
+## What you can do with it
+
+| Capability | How it works |
+|---|---|
+| Role-based access | Register as an `employer` or a `candidate`. The API returns JWT access and refresh tokens, and each endpoint checks your role. |
+| Job postings | Employers create, update, and delete jobs. Anyone can list and filter jobs by `title`, `location`, and `tags`, with pagination. |
+| Applications | Candidates apply with a cover letter and view only their own applications. Each candidate can submit 10 applications per hour. |
+| Background processing | Celery tasks send the email and build the PDF. Each task retries up to three times if it fails. |
+| Interactive docs | Swagger UI at `/docs` lets you authorize with a token and try every endpoint in the browser. |
+
+### Who can do what
+
+| Action | Public | Candidate | Employer |
+|---|---|---|---|
+| List and view jobs | Yes | Yes | Yes |
+| Create, update, or delete a job | No | No | Yes |
+| Submit an application | No | Yes | No |
+| View your own applications and their status | No | Yes | No |
+
+## How the pieces fit together
+
+Docker Compose starts five services: the API, a Celery worker, PostgreSQL,
+Redis, and MinIO.
+
+<Mermaid chart={`flowchart LR
+  client["Client (curl, web or mobile app)"] -->|HTTP and JWT| api["Flask API (Gunicorn)"]
+  api --> db[("PostgreSQL")]
+  api -->|enqueue tasks| redis[("Redis")]
+  redis --> worker["Celery worker"]
+  worker --> db
+  worker -->|SMTP| mail["Mailtrap sandbox inbox"]
+  worker -->|PDF upload| minio[("MinIO bucket")]`} />
+
+| Service | Role |
+|---|---|
+| API | Handles requests, authentication, and validation, then queues background tasks. |
+| Worker | Runs the email and PDF tasks and updates the application's status. |
+| PostgreSQL | Stores users, jobs, and applications. |
+| Redis | Carries queued tasks to the worker and backs the rate limiter. |
+| MinIO | Stores generated PDFs in an S3-compatible bucket. |
+
+## Choose where to go next
 
 <CardGroup cols="2">
-  <Card title="Write your quickstart" icon="party-horn" href="/quickstart">
-    Turn prerequisites, setup, one realistic task, and verification into a short path.
+  <Card title="Quickstart" href="/quickstart">
+    Run the stack, post a job, apply as a candidate, and watch the pipeline finish in about 15 minutes.
   </Card>
-  <Card title="Organize your navigation" icon="grid-round" href="/customization">
-    Group related tasks and references around how people use your product.
-  </Card>
-  <Card title="Document your API" icon="code-simple" href="/api">
-    Replace `openapi.yaml` to publish browsable endpoint docs with a live playground.
-  </Card>
-  <Card title="Learn the Thally workflow" icon="wrench" href="/guides/create-a-site">
-    Create, publish, and update sites from the Cloud dashboard, the CLI, or your AI tools.
+  <Card title="Track an application through the pipeline" href="/guides/track-application-processing">
+    Poll status, read worker logs, and fix the problems you are most likely to meet.
   </Card>
 </CardGroup>
-
-## Publish from one source
-
-Thally turns the same reviewed content into HTML, search, agent discovery files,
-Markdown mirrors, and a read-only MCP surface — so people and AI tools read the
-same, current answer. Add only the locales your readers need.
-
-<Note type="info" title="Start with the product, not the template">
-  Replace this page with the questions, terminology, and workflows your readers
-  already use. Keep `docs.json` focused on the path between those tasks.
-</Note>

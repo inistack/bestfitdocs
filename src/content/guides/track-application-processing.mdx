@@ -1,0 +1,235 @@
+---
+title: Track an application through the pipeline
+navTitle: Track application processing
+description: Poll an application's status, follow its tasks in the worker logs, open the generated PDF, and fix common pipeline problems.
+---
+
+Every application a candidate submits starts a background pipeline. This guide
+shows you how to follow one application from `pending` to `pdf_ready`, from
+code and from the logs, and how to fix the problems you are most likely to meet.
+
+## Before you begin
+
+You need the stack from the [quickstart](/quickstart) running, a candidate
+access token, and the ID of an application that candidate submitted.
+
+## Understand the statuses
+
+The API sets `pending` when it saves the application. The worker updates the
+status as each task finishes.
+
+<Mermaid chart={`flowchart LR
+  pending -->|email accepted| email_sent
+  email_sent -->|PDF stored| pdf_ready
+  pending -->|retries used up| failed
+  email_sent -->|retries used up| failed`} />
+
+| Status | Meaning | Set by |
+|---|---|---|
+| `pending` | The application is saved and its tasks are queued. | API |
+| `email_sent` | The mail server accepted the confirmation email. | `send_confirmation_email` |
+| `pdf_ready` | The PDF is stored and `pdf_url` is filled in. | `generate_application_pdf` |
+| `failed` | A task failed and used all of its retries. | Worker |
+
+Each task retries up to three times, waiting 1, 2, and then 4 seconds between
+attempts.
+
+## Check the status once
+
+Send a `GET` request to the status endpoint with the candidate's token. Only
+the candidate who submitted the application can read it.
+
+```bash
+curl -s http://localhost:5000/applications/1/status \
+  -H "Authorization: Bearer $CANDIDATE_TOKEN" | jq
+```
+
+```json
+{
+  "id": 1,
+  "pdf_url": null,
+  "status": "email_sent"
+}
+```
+
+`pdf_url` is `null` until the status reaches `pdf_ready`.
+
+## Poll until the pipeline finishes
+
+Clients should poll instead of waiting on the request. This script checks every
+two seconds and stops when the PDF is ready, the pipeline fails, or 60 seconds
+pass. It needs the `requests` library (`pip install requests`).
+
+```python
+import os
+import sys
+import time
+
+import requests
+
+BASE_URL = "http://localhost:5000"
+
+
+def wait_for_pipeline(application_id: int, token: str, timeout: float = 60.0) -> dict:
+    """Return the application once its PDF is ready, or raise if it fails or times out."""
+    url = f"{BASE_URL}/applications/{application_id}/status"
+    headers = {"Authorization": f"Bearer {token}"}
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        application = response.json()
+
+        if application["status"] == "pdf_ready":
+            return application
+        if application["status"] == "failed":
+            raise RuntimeError(f"Application {application_id} failed. Check the worker logs.")
+
+        time.sleep(2)
+
+    raise TimeoutError(f"Application {application_id} did not finish within {timeout:.0f} seconds")
+
+
+if __name__ == "__main__":
+    result = wait_for_pipeline(int(sys.argv[1]), os.environ["CANDIDATE_TOKEN"])
+    print(result)
+```
+
+Export your token, then run the script with the application ID:
+
+```bash
+export CANDIDATE_TOKEN
+python wait_for_pipeline.py 1
+```
+
+```text
+{'id': 1, 'pdf_url': 'http://minio:9000/application-pdfs/application_1.pdf', 'status': 'pdf_ready'}
+```
+
+<Tip>
+  Access tokens expire after 15 minutes by default. For long-running clients,
+  log in again at `POST /auth/login` when you receive a `401`.
+</Tip>
+
+## Follow the tasks in the worker logs
+
+Stream the worker's output while you submit an application:
+
+```bash
+docker compose logs -f worker
+```
+
+A healthy run logs each task when it arrives and when it succeeds:
+
+```text
+Task jobboard.tasks.send_confirmation_email[19d45423-68f2-42ad-86f3-246178d625a4] received
+Task jobboard.tasks.send_confirmation_email[19d45423-68f2-42ad-86f3-246178d625a4] succeeded in 7.05s: 'Confirmation email sent to jeni.okafor@example.com for job Backend Engineer'
+Task jobboard.tasks.generate_application_pdf[276a8dc5-ad3a-43d0-a5ad-511853789e56] succeeded in 0.29s: 'PDF generated for application 1'
+```
+
+You will also see messages that look alarming but are harmless in local
+development:
+
+- `SecurityWarning: You're running the worker with superuser privileges`
+  appears because the container runs as root.
+- Many `WARNING` lines containing `send:` and `reply:` are the SMTP
+  conversation, which the mail library logs at warning level.
+- `Using fontTools instead of HarfBuzz-Subset` comes from the PDF library and
+  does not affect the output.
+
+## Open the generated PDF
+
+The worker uploads each PDF to the `application-pdfs` bucket in MinIO and saves
+its address in `pdf_url`. That address uses the hostname `minio`, which only
+resolves inside Docker, and the bucket is private, so opening the link in your
+browser fails.
+
+To view the file, open the MinIO console at `http://localhost:9001`, sign in
+with `minioadmin` for both the username and password, open the
+`application-pdfs` bucket, and download `application_<id>.pdf`.
+
+## Troubleshooting
+
+### The status stays `pending`
+
+The worker is not picking up tasks. Check its logs:
+
+```bash
+docker compose logs worker --tail 20
+```
+
+If you see `Cannot connect to redis://redis:6379/0 ... Temporary failure in
+name resolution`, the worker and Redis are not on the same Docker network. This
+happens after an interrupted `docker compose up`, for example when a port
+conflict stopped one container halfway through starting.
+
+Confirm it, then recreate the stack:
+
+```bash
+docker compose exec worker getent hosts redis
+```
+
+No output means the worker cannot see Redis. Fix it with:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+`docker compose down` keeps your data. Do not add `-v` unless you want to
+delete it.
+
+### The status becomes `failed`
+
+A task used all of its retries. The worker log names the task and the error.
+The most common cause is wrong SMTP credentials, which logs an authentication
+error from the mail server. Correct `MAIL_USERNAME` and `MAIL_PASSWORD` in
+`.env`, then apply the change:
+
+```bash
+docker compose up -d
+```
+
+Submit a new application to test the fix.
+
+### `429 Too Many Requests` when you apply
+
+Each candidate can submit 10 applications per hour. Wait for the window to
+reset, or register a second candidate account and use that token.
+
+### `401` or `403` responses
+
+The API returns errors in this shape:
+
+```json
+{
+  "code": 403,
+  "message": "Candidate role required",
+  "status": "Forbidden"
+}
+```
+
+| Response | Cause | Fix |
+|---|---|---|
+| `401` with `Missing Authorization Header` | The request has no token. | Send `Authorization: Bearer <access_token>`. |
+| `401` with `Token has expired` | The access token is older than 15 minutes. | Log in again at `POST /auth/login`. |
+| `403` with `Candidate role required` | You used an employer token. | Use the candidate's token. |
+| `403` with `Not your application` | The application belongs to another candidate. | Use the token of the candidate who applied. |
+| `404` with `Application not found` | No application has that ID. | Check the `id` returned when you applied. |
+
+### You need a clean slate
+
+<Warning>
+  This deletes all users, jobs, applications, and stored PDFs.
+</Warning>
+
+```bash
+docker compose down -v
+docker compose up --build -d
+```
+
+## Related
+
+- [Quickstart](/quickstart): run the stack and submit your first application.
+- Swagger UI at `http://localhost:5000/docs`: try every endpoint in the browser.

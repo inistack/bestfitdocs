@@ -1,53 +1,121 @@
 ---
 title: Authentication
-description: How to authenticate requests, and how to document your own scheme.
+description: Get an access token, send it with each request, and fix the authentication errors you are most likely to see.
 ---
 
-The Sample Posts API is intentionally public: no key, token, or header is
-required, so every request in this reference works the moment you press
-**Send**.
+The API uses JSON Web Tokens (JWTs) as bearer tokens. You get a token when you
+register or log in, then send it in the `Authorization` header of every request
+to a protected endpoint. Endpoints that list or read jobs, and the register and
+login endpoints, need no token.
 
-Your API almost certainly is not public. This page shows how to document the
-two most common schemes so readers always know exactly what to put in the
-request — replace it with the scheme your API uses.
+## Get an access token
 
-## Documenting a bearer token
+Registering returns tokens immediately, so you do not need to log in afterward.
 
-Show the header exactly as readers must send it, then where the token comes
-from:
+<Tabs>
+  <Tab title="Register">
+    ```bash
+    curl -X POST http://localhost:5000/auth/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "jeni.okafor@example.com",
+        "name": "Jeni Okafor",
+        "password": "correct-horse-battery",
+        "role": "candidate"
+      }'
+    ```
+
+    The `role` is either `employer` or `candidate`, and the password needs at
+    least 8 characters. The response has status `201`.
+  </Tab>
+  <Tab title="Log in">
+    ```bash
+    curl -X POST http://localhost:5000/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "jeni.okafor@example.com",
+        "password": "correct-horse-battery"
+      }'
+    ```
+
+    The response has status `200`.
+  </Tab>
+</Tabs>
+
+Both endpoints return the same body. The values below are shortened examples;
+real tokens are much longer.
+
+```json
+{
+  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.<payload>.<signature>",
+  "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.<payload>.<signature>"
+}
+```
+
+## Send the token
+
+Put the `access_token` in the `Authorization` header, after the word `Bearer`:
 
 ```bash
-curl --request GET \
-  --url 'https://api.yourproduct.com/v1/posts' \
-  --header 'Authorization: Bearer YOUR_API_TOKEN'
+curl http://localhost:5000/applications \
+  -H "Authorization: Bearer <access_token>"
 ```
 
-## Documenting an API key
-
-```bash
-curl --request GET \
-  --url 'https://api.yourproduct.com/v1/posts' \
-  --header 'X-Api-Key: YOUR_API_KEY'
-```
-
-## Declare the scheme in OpenAPI
-
-Add a security scheme to `openapi.yaml` and the generated endpoint pages will
-show the requirement — and the playground will prompt for the credential —
-automatically:
-
-```yaml
-components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-security:
-  - bearerAuth: []
-```
+Replace `<access_token>` with the token from the previous step. Send the
+`access_token` only. The `refresh_token` is rejected on protected endpoints.
 
 <Tip>
-  Tell readers where to create and revoke credentials, how long they live, and
-  what happens when one expires. Those three answers prevent most
-  authentication support tickets.
+  In Swagger UI at `http://localhost:5000/docs`, select **Authorize** and paste
+  the access token without the `Bearer` prefix. Swagger UI adds it for you.
 </Tip>
+
+## Know how long tokens last
+
+| Token | Default lifetime | Use |
+|---|---|---|
+| `access_token` | 15 minutes | Authenticate requests. |
+| `refresh_token` | 30 days | None yet. No endpoint accepts it. |
+
+When an access token expires, log in again at `POST /auth/login` to get a new
+one. Your client should do this when it receives a `401` with the message
+`Token has expired`.
+
+## Understand roles
+
+Every account has one role, chosen at registration and stored inside the token.
+Each protected endpoint requires a specific role.
+
+| Role | Can do | Cannot do |
+|---|---|---|
+| `employer` | Create, update, and delete jobs. | Apply for jobs or read applications. |
+| `candidate` | Apply for jobs, list their own applications, and check their status. | Create, update, or delete jobs. |
+
+A candidate can read only their own applications. Requesting another
+candidate's application returns `403`.
+
+## Fix authentication errors
+
+Errors about the token itself use a short `msg` shape. Errors about roles,
+ownership, and credentials use the [standard error shape](/api/introduction#errors).
+
+| Status | Response | Cause | Fix |
+|---|---|---|---|
+| `401` | `{"msg": "Missing Authorization Header"}` | The request has no token. | Add the `Authorization: Bearer <access_token>` header. |
+| `401` | `{"msg": "Token has expired"}` | The access token is older than its lifetime. | Log in again at `POST /auth/login`. |
+| `422` | `{"msg": "Not enough segments"}` or `{"msg": "Signature verification failed"}` | The token is malformed, was altered, or was signed with a different secret key. | Send the full `access_token` exactly as returned, from the same running stack. |
+| `422` | `{"msg": "Only access tokens are allowed"}` | You sent the `refresh_token`. | Send the `access_token` instead. |
+| `401` | `"message": "Invalid email or password"` | The login email or password is wrong. | Check the credentials. |
+| `403` | `"message": "Employer role required"` or `"Candidate role required"` | The token's role does not match the endpoint. | Use a token from an account with the required role. |
+| `403` | `"message": "Not your application"` | The application belongs to another candidate. | Use the token of the candidate who applied. |
+| `409` | `"message": "User with this email already exists"` | The email is already registered. | Log in instead. |
+
+<Warning>
+  Tokens are signed with the `JWT_SECRET_KEY` in your `.env` file. If you change
+  it, every existing token stops working and users must log in again. Keep the
+  value private and never commit your `.env` file.
+</Warning>
+
+## Next steps
+
+Browse the endpoint pages in this tab to see every field and response, or
+follow the [quickstart](/quickstart) to use a token end to end.

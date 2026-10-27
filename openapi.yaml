@@ -1,146 +1,709 @@
 openapi: 3.1.0
 info:
-  title: Sample Posts API
+  title: BestFit Job Board API
   version: 1.0.0
   description: >-
-    A working sample backed by the public JSONPlaceholder service, so every
-    request in this reference returns a live response you can inspect. Replace
-    this file with the OpenAPI specification for the API your readers use.
+    A Flask API for posting jobs and accepting applications. Employers manage
+    jobs, candidates apply, and a background worker sends a confirmation email
+    and generates a PDF summary for every application.
 servers:
-  - url: https://jsonplaceholder.typicode.com
-    description: Live demo server
+  - url: http://localhost:5000
+    description: Local Docker Compose stack
 tags:
-  - name: Posts
-    description: Create and read example posts.
-  - name: Users
-    description: Look up the example authors behind each post.
+  - name: Authentication
+    description: Create an account and get the tokens you use to call protected endpoints.
+  - name: Jobs
+    description: Publish, search, update, and delete job postings.
+  - name: Applications
+    description: Apply for jobs and track each application through background processing.
+  - name: Health
+    description: Check that the API is running.
 paths:
-  /posts:
+  /:
     get:
-      operationId: listPosts
-      tags: [Posts]
-      summary: List posts
-      description: Return every post. Real APIs would paginate a list this size.
+      operationId: getWelcome
+      tags: [Health]
+      summary: Check the API is running
+      description: Return a welcome message. Use this to confirm the API container started.
+      security: []
       responses:
         '200':
-          description: All posts.
+          description: The API is running.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Post'
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Welcome to the Job Board API!
+                required: [message]
+  /auth/register:
     post:
-      operationId: createPost
-      tags: [Posts]
-      summary: Create a post
+      operationId: registerUser
+      tags: [Authentication]
+      summary: Register a user
       description: >-
-        Create a post and receive it back with a generated id. The demo server
-        accepts the write and echoes the result without storing it, so you can
-        try requests freely.
+        Create an account as an `employer` or a `candidate`. The response
+        includes tokens, so you do not need to log in separately.
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                title:
-                  type: string
-                  example: Hello from the API playground
-                body:
-                  type: string
-                  example: This request runs against a live server.
-                userId:
-                  type: integer
-                  example: 1
-              required: [title, body, userId]
+              $ref: '#/components/schemas/RegisterRequest'
       responses:
         '201':
-          description: The created post, including its generated id.
+          description: The account was created.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Post'
-  /posts/{id}:
+                $ref: '#/components/schemas/TokenResponse'
+        '409':
+          description: An account with this email already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: 409
+                message: User with this email already exists
+                status: Conflict
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [Authentication]
+      summary: Log in
+      description: Exchange an email and password for a new access token and refresh token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: The credentials are valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: The email or password is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: 401
+                message: Invalid email or password
+                status: Unauthorized
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+  /jobs:
     get:
-      operationId: getPost
-      tags: [Posts]
-      summary: Get a post
-      description: Return one post by id. Ids 1–100 exist on the demo server.
+      operationId: listJobs
+      tags: [Jobs]
+      summary: List jobs
+      description: >-
+        Return jobs, with optional filters. Each filter is a case-insensitive
+        "contains" match, and the filters combine with AND. Use `page` and `page_size` to move through results. The
+        `X-Pagination` response header describes the full result set.
+      security: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: The post id.
+        - name: title
+          in: query
+          required: false
+          description: Return jobs whose title contains this text.
+          schema:
+            type: string
+            example: engineer
+        - name: location
+          in: query
+          required: false
+          description: Return jobs whose location contains this text.
+          schema:
+            type: string
+            example: remote
+        - name: tags
+          in: query
+          required: false
+          description: Return jobs whose tags contain this text.
+          schema:
+            type: string
+            example: python
+        - name: page
+          in: query
+          required: false
+          description: The page number to return.
           schema:
             type: integer
             minimum: 1
-            example: 1
-      responses:
-        '200':
-          description: The requested post.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Post'
-        '404':
-          description: No post has this id.
-  /users/{id}:
-    get:
-      operationId: getUser
-      tags: [Users]
-      summary: Get a user
-      description: Return the profile of an example author. Ids 1–10 exist.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: The user id.
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          description: The number of jobs per page.
           schema:
             type: integer
             minimum: 1
-            example: 1
+            maximum: 100
+            default: 10
       responses:
         '200':
-          description: The requested user.
+          description: A page of jobs. The list is empty when nothing matches.
+          headers:
+            X-Pagination:
+              description: >-
+                A JSON string with `total`, `total_pages`, `first_page`,
+                `last_page`, and `page`. `previous_page` and `next_page` appear
+                only when those pages exist.
+              schema:
+                type: string
+                example: '{"total": 23, "total_pages": 3, "first_page": 1, "last_page": 3, "page": 1, "next_page": 2}'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                type: array
+                items:
+                  $ref: '#/components/schemas/Job'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+    post:
+      operationId: createJob
+      tags: [Jobs]
+      summary: Create a job
+      description: Publish a job posting. Requires the `employer` role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobInput'
+      responses:
+        '201':
+          description: The created job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+  /jobs/{job_id}:
+    parameters:
+      - name: job_id
+        in: path
+        required: true
+        description: The job ID.
+        schema:
+          type: integer
+          minimum: 1
+          example: 1
+    get:
+      operationId: getJob
+      tags: [Jobs]
+      summary: Get a job
+      description: Return one job by ID.
+      security: []
+      responses:
+        '200':
+          description: The requested job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
         '404':
-          description: No user has this id.
+          $ref: '#/components/responses/NotFound'
+    put:
+      operationId: updateJob
+      tags: [Jobs]
+      summary: Update a job
+      description: >-
+        Change one or more fields of a job. Send only the fields you want to
+        change. Requires the `employer` role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobUpdate'
+      responses:
+        '200':
+          description: The updated job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+    delete:
+      operationId: deleteJob
+      tags: [Jobs]
+      summary: Delete a job
+      description: Delete a job permanently. Requires the `employer` role.
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: The job was deleted. The response has no body.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /applications:
+    get:
+      operationId: listApplications
+      tags: [Applications]
+      summary: List your applications
+      description: Return every application the authenticated candidate has submitted. Requires the `candidate` role.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The candidate's applications. The list is empty if they have not applied yet.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Application'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createApplication
+      tags: [Applications]
+      summary: Apply for a job
+      description: >-
+        Submit an application. The API saves it with the status `pending` and
+        responds immediately. A background worker then sends a confirmation
+        email and generates a PDF summary, and the status changes as each step
+        finishes. Poll [Get an application's status](#operation/getApplicationStatus)
+        to follow progress. Requires the `candidate` role. Each candidate can
+        submit 10 applications per hour.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationInput'
+      responses:
+        '201':
+          description: The saved application, with the status `pending`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No job has this `job_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: 404
+                message: Job not found
+                status: Not Found
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          description: The candidate already submitted 10 applications in the last hour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: 429
+                status: Too Many Requests
+  /applications/{application_id}:
+    parameters:
+      - name: application_id
+        in: path
+        required: true
+        description: The application ID.
+        schema:
+          type: integer
+          minimum: 1
+          example: 1
+    get:
+      operationId: getApplication
+      tags: [Applications]
+      summary: Get an application
+      description: Return one of your applications. Requires the `candidate` role.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The requested application.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No application has this ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: 404
+                message: Application not found
+                status: Not Found
+  /applications/{application_id}/status:
+    parameters:
+      - name: application_id
+        in: path
+        required: true
+        description: The application ID.
+        schema:
+          type: integer
+          minimum: 1
+          example: 1
+    get:
+      operationId: getApplicationStatus
+      tags: [Applications]
+      summary: Get an application's status
+      description: >-
+        Return the processing status of one of your applications, and the PDF
+        location once it exists. Poll this endpoint every few seconds until the
+        status is `pdf_ready` or `failed`. Requires the `candidate` role.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The application's current status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No application has this ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: 404
+                message: Application not found
+                status: Not Found
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Send the `access_token` from `POST /auth/register` or `POST /auth/login`
+        in the `Authorization` header as `Bearer <access_token>`. Access tokens
+        expire after 15 minutes by default.
+  responses:
+    Unauthorized:
+      description: >-
+        The access token is missing or expired. This error uses the token error
+        shape, not the standard error shape.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TokenError'
+          example:
+            msg: Missing Authorization Header
+    Forbidden:
+      description: >-
+        The token is valid but cannot perform this action. Either the account has
+        the wrong role, or the application belongs to another candidate.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 403
+            message: Employer role required
+            status: Forbidden
+    NotFound:
+      description: No job has this ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: 404
+            message: Job with ID 42 not found
+            status: Not Found
+    ValidationFailed:
+      description: The request body or query string failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'
+          example:
+            code: 422
+            errors:
+              json:
+                password:
+                  - Shorter than minimum length 8.
+            status: Unprocessable Entity
   schemas:
-    Post:
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: hiring@northwind-labs.example
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Northwind Labs
+        password:
+          type: string
+          minLength: 8
+          example: correct-horse-battery
+        role:
+          type: string
+          enum: [employer, candidate]
+          description: >-
+            `employer` accounts manage jobs. `candidate` accounts apply for them.
+          example: employer
+      required: [email, name, password, role]
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: hiring@northwind-labs.example
+        password:
+          type: string
+          example: correct-horse-battery
+      required: [email, password]
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: Send this token in the `Authorization` header of protected requests.
+          example: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.<payload>.<signature>
+        refresh_token:
+          type: string
+          description: A longer-lived token. No endpoint accepts it yet, so log in again when the access token expires.
+          example: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.<payload>.<signature>
+      required: [access_token, refresh_token]
+    JobInput:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Backend Engineer
+        description:
+          type: string
+          minLength: 1
+          example: Build and operate the APIs behind our robotics fleet dashboard.
+        location:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Remote (Africa)
+        tags:
+          type: [string, 'null']
+          maxLength: 255
+          description: Comma-separated tags. Optional.
+          example: python,flask,postgres
+      required: [title, description, location]
+    JobUpdate:
+      type: object
+      description: Any subset of the job fields. Fields you omit are left unchanged.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Senior Backend Engineer
+        description:
+          type: string
+          minLength: 1
+          example: Lead the APIs behind our robotics fleet dashboard.
+        location:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: Remote (Africa)
+        tags:
+          type: [string, 'null']
+          maxLength: 255
+          example: python,flask,postgres,celery
+    Job:
       type: object
       properties:
         id:
-          type: integer
-          example: 1
-        userId:
           type: integer
           example: 1
         title:
           type: string
-          example: Hello from the API playground
-        body:
+          example: Backend Engineer
+        description:
           type: string
-          example: This request runs against a live server.
-      required: [id, userId, title, body]
-    User:
+          example: Build and operate the APIs behind our robotics fleet dashboard.
+        location:
+          type: string
+          example: Remote (Africa)
+        tags:
+          type: [string, 'null']
+          example: python,flask,postgres
+        employer_id:
+          type: integer
+          description: The ID of the employer who posted the job.
+          example: 1
+        created_at:
+          type: string
+          format: date-time
+          description: When the job was created. The value has no timezone offset.
+          example: '2026-10-27T11:30:12.418532'
+      required: [id, title, description, location, employer_id, created_at]
+    ApplicationInput:
+      type: object
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+          description: The ID of the job you are applying for.
+          example: 1
+        cover_letter:
+          type: string
+          minLength: 1
+          example: I have four years of Flask and Celery experience and would like to help build your fleet dashboard.
+      required: [job_id, cover_letter]
+    Application:
       type: object
       properties:
         id:
           type: integer
           example: 1
-        name:
+        job_id:
+          type: integer
+          example: 1
+        candidate_id:
+          type: integer
+          description: The ID of the candidate who applied.
+          example: 2
+        cover_letter:
           type: string
-          example: Leanne Graham
-        username:
+          example: I have four years of Flask and Celery experience and would like to help build your fleet dashboard.
+        status:
+          $ref: '#/components/schemas/ApplicationStatusValue'
+        pdf_url:
+          type: [string, 'null']
+          description: >-
+            The storage address of the generated PDF. It is `null` until the
+            status is `pdf_ready`. The address uses the internal hostname
+            `minio`, so open the file through the MinIO console instead.
+          example: http://minio:9000/application-pdfs/application_1.pdf
+        created_at:
           type: string
-          example: Bret
-        email:
+          format: date-time
+          description: When the application was submitted. The value has no timezone offset.
+          example: '2026-10-27T11:36:08.512345'
+      required: [id, job_id, candidate_id, cover_letter, status, created_at]
+    ApplicationStatus:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        status:
+          $ref: '#/components/schemas/ApplicationStatusValue'
+        pdf_url:
+          type: [string, 'null']
+          description: The storage address of the generated PDF. It is `null` until the status is `pdf_ready`.
+          example: http://minio:9000/application-pdfs/application_1.pdf
+      required: [id, status]
+    ApplicationStatusValue:
+      type: string
+      enum: [pending, email_sent, pdf_ready, failed]
+      description: |-
+        Where the application is in background processing:
+
+        - `pending`: saved, with its tasks queued.
+        - `email_sent`: the confirmation email was accepted by the mail server.
+        - `pdf_ready`: the PDF summary is stored and `pdf_url` is set.
+        - `failed`: a task used all of its retries.
+      example: pdf_ready
+    Error:
+      type: object
+      description: The standard error shape.
+      properties:
+        code:
+          type: integer
+          description: The HTTP status code.
+          example: 404
+        status:
           type: string
-          example: Sincere@april.biz
-      required: [id, name, username, email]
+          description: The HTTP status name.
+          example: Not Found
+        message:
+          type: string
+          description: A human-readable explanation. Some errors, such as rate limiting, omit it.
+          example: Job with ID 42 not found
+      required: [code, status]
+    ValidationError:
+      type: object
+      description: The error shape for requests that fail validation.
+      properties:
+        code:
+          type: integer
+          example: 422
+        status:
+          type: string
+          example: Unprocessable Entity
+        errors:
+          type: object
+          description: >-
+            Messages grouped first by where the problem is (`json` for the body,
+            `query` for the query string) and then by field name.
+          additionalProperties: true
+      required: [code, status, errors]
+    TokenError:
+      type: object
+      description: The error shape for missing, expired, or malformed tokens.
+      properties:
+        msg:
+          type: string
+          example: Token has expired
+      required: [msg]

@@ -1,47 +1,232 @@
 ---
 title: Quickstart
-description: Guide a new reader through one useful workflow and show them how to verify it.
+description: Run the BestFit Job Board API with Docker Compose, post a job, apply as a candidate, and watch the background pipeline finish.
 ---
 
-A strong quickstart produces one meaningful result. Replace the placeholders
-below with the shortest supported path for your product.
+In about 15 minutes you will run the full stack locally, publish a job as an
+employer, apply for it as a candidate, and confirm that the confirmation email
+and PDF summary were produced. The first image build is the slowest step
+because it installs the system libraries used for PDF rendering.
 
 ## Before you begin
 
-List only the requirements needed for this workflow:
+You need:
 
-- An account or credential, when required
-- A supported runtime, device, browser, or operating system
-- Permission to create or change the resource used in the example
+- Docker with Docker Compose v2
+- Git, `curl`, and [`jq`](https://jqlang.org/)
+- A free [Mailtrap](https://mailtrap.io/) account with a sandbox inbox, which
+  gives you the SMTP username and password the worker uses to send email
 
 <Steps>
-  <Step title="Install the required tool">
-    Give readers one recommended installation command.
-
+  <Step title="Clone the repository">
     ```bash
-    npm install your-package
+    git clone https://github.com/inistack/bestfit_jobboard.git
+    cd bestfit_jobboard
     ```
   </Step>
-  <Step title="Add the minimum configuration">
-    Include only the values needed for the first successful run.
+
+  <Step title="Create your .env file">
+    Copy the template:
 
     ```bash
-    your-cli init
+    cp .env.example .env
     ```
-  </Step>
-  <Step title="Complete the first task">
-    Use a realistic example that produces an observable result.
+
+    Open `.env` and fill in these six values. Generate each secret by running
+    `openssl rand -hex 32`, and copy the SMTP username and password from your
+    Mailtrap inbox's **SMTP Settings**.
 
     ```bash
-    your-cli start
+    SECRET_KEY=<random value>
+    JWT_SECRET_KEY=<a different random value>
+    MAIL_SERVER=sandbox.smtp.mailtrap.io
+    MAIL_PORT=2525
+    MAIL_USERNAME=<your Mailtrap username>
+    MAIL_PASSWORD=<your Mailtrap password>
+    ```
+
+    Leave the `FLASK_DEBUG` and `S3_*` keys blank. Docker Compose configures
+    storage for you.
+  </Step>
+
+  <Step title="Start the stack">
+    ```bash
+    docker compose up --build -d
+    ```
+
+    When the build finishes, check that all five services are running:
+
+    ```bash
+    docker compose ps
+    ```
+
+    `api`, `worker`, `db`, `redis`, and `minio` should all show `Up`, and
+    `db`, `redis`, and `minio` should show `healthy`. The API container applies
+    database migrations each time it starts. Confirm the API responds:
+
+    ```bash
+    curl http://localhost:5000/
+    ```
+
+    ```json
+    {"message":"Welcome to the Job Board API!"}
+    ```
+
+    <Accordion title="Run the database migrations yourself">
+      Run this command if you see `relation "users" does not exist`, or after you
+      change a model:
+
+      ```bash
+      docker compose exec api flask --app run:app db upgrade
+      ```
+
+      If you run the API outside Docker, activate your virtual environment, set
+      `DATABASE_URL`, and run `flask --app run:app db upgrade` from the project
+      root.
+    </Accordion>
+  </Step>
+
+  <Step title="Register an employer">
+    Registering returns your tokens, so you do not need a separate login. Keep
+    using this terminal tab so the variables below persist.
+
+    ```bash
+    EMPLOYER_TOKEN=$(curl -s -X POST http://localhost:5000/auth/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "hiring@northwind-labs.example",
+        "name": "Northwind Labs",
+        "password": "correct-horse-battery",
+        "role": "employer"
+      }' | jq -r .access_token)
+    ```
+
+    Check that it worked. The output should start with `eyJ`:
+
+    ```bash
+    echo "${EMPLOYER_TOKEN:0:20}"
     ```
   </Step>
-  <Step title="Verify the result">
-    State exactly what the reader should see and how to recover when it does not appear.
+
+  <Step title="Post a job">
+    ```bash
+    JOB=$(curl -s -X POST http://localhost:5000/jobs \
+      -H "Authorization: Bearer $EMPLOYER_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "title": "Backend Engineer",
+        "description": "Build and operate the APIs behind our robotics fleet dashboard.",
+        "location": "Remote (Africa)",
+        "tags": "python,flask,postgres"
+      }')
+    echo "$JOB" | jq
+    JOB_ID=$(echo "$JOB" | jq -r .id)
+    ```
+
+    The response shows the new job:
+
+    ```json
+    {
+      "created_at": "2026-10-27T11:30:12.418532",
+      "description": "Build and operate the APIs behind our robotics fleet dashboard.",
+      "employer_id": 1,
+      "id": 1,
+      "location": "Remote (Africa)",
+      "tags": "python,flask,postgres",
+      "title": "Backend Engineer"
+    }
+    ```
+  </Step>
+
+  <Step title="Register a candidate">
+    ```bash
+    CANDIDATE_TOKEN=$(curl -s -X POST http://localhost:5000/auth/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "jeni.okafor@example.com",
+        "name": "Jeni Okafor",
+        "password": "correct-horse-battery",
+        "role": "candidate"
+      }' | jq -r .access_token)
+    ```
+  </Step>
+
+  <Step title="Apply for the job">
+    ```bash
+    APPLICATION=$(curl -s -X POST http://localhost:5000/applications \
+      -H "Authorization: Bearer $CANDIDATE_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"job_id\": $JOB_ID, \"cover_letter\": \"I have four years of Flask and Celery experience and would like to help build your fleet dashboard.\"}")
+    echo "$APPLICATION" | jq
+    APPLICATION_ID=$(echo "$APPLICATION" | jq -r .id)
+    ```
+
+    The API responds immediately. The status is `pending` because the worker has
+    not processed the application yet:
+
+    ```json
+    {
+      "candidate_id": 2,
+      "cover_letter": "I have four years of Flask and Celery experience and would like to help build your fleet dashboard.",
+      "created_at": "2026-10-27T11:36:08.512345",
+      "id": 1,
+      "job_id": 1,
+      "pdf_url": null,
+      "status": "pending"
+    }
+    ```
+  </Step>
+
+  <Step title="Watch the pipeline finish">
+    Run this command every few seconds:
+
+    ```bash
+    curl -s http://localhost:5000/applications/$APPLICATION_ID/status \
+      -H "Authorization: Bearer $CANDIDATE_TOKEN" | jq
+    ```
+
+    The status moves from `pending` to `email_sent` to `pdf_ready`. Sending the
+    email is usually the slowest step and can take several seconds. When the
+    pipeline finishes, you see this:
+
+    ```json
+    {
+      "id": 1,
+      "pdf_url": "http://minio:9000/application-pdfs/application_1.pdf",
+      "status": "pdf_ready"
+    }
+    ```
   </Step>
 </Steps>
 
-## Choose the next task
+## Verify the results
 
-Link to the guide that naturally follows this result. Avoid ending the reader’s
-journey with a generic list of every feature.
+You now have an application with a `pdf_ready` status. Confirm that both
+outputs exist:
+
+- **Email:** open your Mailtrap sandbox inbox. A message titled **Application
+  Confirmation for Backend Engineer** is addressed to `jeni.okafor@example.com`.
+- **PDF:** open the MinIO console at `http://localhost:9001` and sign in with
+  `minioadmin` for both the username and password. Open the
+  `application-pdfs` bucket and download `application_1.pdf`.
+
+<Note>
+  The `pdf_url` uses the hostname `minio`, which only resolves inside Docker.
+  Use the MinIO console to open the file from your computer.
+</Note>
+
+## If something goes wrong
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `ValueError: invalid literal for int() with base 10: ''` in `docker compose logs api` | `MAIL_PORT` is empty because `.env` is missing or incomplete | Set all six values in `.env`, then run `docker compose up -d` |
+| `failed to bind host port ... address already in use` | Another program uses port 5000, 9000, 9001, 5433, or 6380 | Find it with `sudo ss -ltnp \| grep <port>` and stop it, or change the left-hand number of that port mapping in `docker-compose.yml` |
+| `relation "users" does not exist` | The database migrations did not run | Run the migration command in step 3 |
+| The status stays `pending` or becomes `failed` | The worker cannot reach Redis, or an email or PDF task failed | See [Track an application through the pipeline](/guides/track-application-processing) |
+
+## Next steps
+
+Read [Track an application through the pipeline](/guides/track-application-processing)
+to poll status from code, follow a task in the worker logs, and fix pipeline
+problems. To try every endpoint in the browser, open the Swagger UI at
+`http://localhost:5000/docs`.
