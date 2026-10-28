@@ -8,9 +8,9 @@ employer, apply for it as a candidate, and confirm that the confirmation email
 and PDF summary were produced. The first image build is the slowest step
 because it installs the system libraries used for PDF rendering.
 
-## Before you begin
+## Prerequisites
 
-You need:
+You'll need:
 
 - Docker with Docker Compose v2
 - Git, `curl`, and [`jq`](https://jqlang.org/)
@@ -60,7 +60,7 @@ You need:
     docker compose ps
     ```
 
-    `api`, `worker`, `db`, `redis`, and `minio` should all show `Up`, and
+    `api`, `worker`, `db`, `redis`, and `minio` should all show up, and
     `db`, `redis`, and `minio` should show `healthy`. The API container applies
     database migrations each time it starts. Confirm the API responds:
 
@@ -215,14 +215,39 @@ outputs exist:
   Use the MinIO console to open the file from your computer.
 </Note>
 
-## If something goes wrong
+## Troubleshooting
+Solutions to a few issues you might encounter during setup and usage.
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| `ValueError: invalid literal for int() with base 10: ''` in `docker compose logs api` | `MAIL_PORT` is empty because `.env` is missing or incomplete | Set all six values in `.env`, then run `docker compose up -d` |
-| `failed to bind host port ... address already in use` | Another program uses port 5000, 9000, 9001, 5433, or 6380 | Find it with `sudo ss -ltnp \| grep <port>` and stop it, or change the left-hand number of that port mapping in `docker-compose.yml` |
-| `relation "users" does not exist` | The database migrations did not run | Run the migration command in step 3 |
-| The status stays `pending` or becomes `failed` | The worker cannot reach Redis, or an email or PDF task failed | See [Track an application through the pipeline](/guides/track-application-processing) |
+ <Accordion title="`ValueError: invalid literal for int() with base 10: ''` in `docker compose logs api`">
+  **Cause**:
+  > `MAIL_PORT` is empty because `.env` is missing or incomplete
+
+  **Solution**:
+  > Set all six values in `.env`, then run `docker compose up -d`
+  </Accordion>
+
+  <Accordion title="`failed to bind host port ... address already in use` ">
+  **Cause**:
+  > Another program uses port 5000, 9000, 9001, 5433, or 6380
+
+  **Solution**:
+  > Find it with `sudo ss -ltnp \| grep <port>` and stop it, or change the left-hand number of that port mapping in `docker-compose.yml` 
+  </Accordion>
+
+  <Accordion title="`relation 'users' does not exist`">
+  **Cause**:
+  > The database migrations did not run
+  **Solution**:
+  > Run the migration command in step 3
+  </Accordion>
+
+  <Accordion title="The status stays `pending` or becomes `failed`">
+  **Cause**:
+  > The worker cannot reach Redis, or an email or PDF task failed
+
+  **Solution**:
+  > See [Track an application through the pipeline](/guides/track-application-processing)
+  </Accordion>
 
 ## Next steps
 

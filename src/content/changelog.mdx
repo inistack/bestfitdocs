@@ -1,15 +1,24 @@
 ---
 title: Changelog
-description: Record product changes that alter how readers use the documented experience.
+description: Updates and improvements to the BestFit JobBoard API.
 ---
 
-## v0.1.0
+<Update label="September 2026" description="Authentication, job management, and asynchronous application processing">
 
-The first published version of this documentation.
+### What's new
 
-- A task-focused introduction and quickstart
-- Browsable API documentation generated from `openapi.yaml`
-- Agent-readable discovery files and a read-only MCP endpoint
+-  **JWT authentication:** Register and log in as an employer or candidate using token-based authentication.
+-  **Role-based access control:** Restrict job creation and management to employers, while candidates can submit applications.
+-  **Job search:** Browse, search, and filter publicly available job postings.
+-  **Asynchronous application processing:** Process applications in the background using Celery and Redis.
+-  **Email notifications:** Send application confirmation emails through the background task pipeline.
+-  **PDF generation:** Generate and store PDF summaries of submitted applications.
+-  **Application status tracking:** Check processing progress, from pending submission to email confirmation and PDF generation.
+-  **Interactive API documentation:** Explore endpoints and test authenticated requests through Swagger UI at `/docs`.
 
-Replace this entry with changes your readers need to understand. Lead with the
-impact, then link to the guide or reference that explains the new behavior.
+### Infrastructure and testing
+
+Docker Compose simplifies local development by running the API, PostgreSQL, Redis, and Celery worker together. 
+Run `pytest` to execute the test suite.
+
+</Update>
