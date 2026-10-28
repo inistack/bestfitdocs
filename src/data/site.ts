@@ -176,8 +176,8 @@ const templateSiteConfig: SiteConfig = {
 // Managed by Thally Cloud onboarding.
 export const siteConfig: SiteConfig = {
   ...templateSiteConfig,
-  name: "BestFit JobBoard",
-  description: "BestFit JobBoard documentation",
+  name: "BestFit JobBoard API",
+  description: "A RESTful Job Board API built with Flask.",
   repoUrl: "https://github.com/inistack/bestfitdocs",
   links: [
     { label: "Get started", href: "/quickstart" },
