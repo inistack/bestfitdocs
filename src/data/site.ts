@@ -177,7 +177,7 @@ const templateSiteConfig: SiteConfig = {
 export const siteConfig: SiteConfig = {
   ...templateSiteConfig,
   name: "BestFit JobBoard API",
-  description: "BestFit JobBoard API documentation",
+  description: "A RESTful Job Board API built with Flask.",
   repoUrl: "https://github.com/inistack/bestfitdocs",
   links: [
     { label: "Get started", href: "/quickstart" },
